@@ -9,9 +9,9 @@ st.set_page_config(page_title="班级座位分组可视化", page_icon="🎨", l
 st.title("🎨 七林2025级(6)班 智能座位分组可视化(预设轮换版)")
 st.markdown("""
 **图例说明：**
-*   **色块**：同一种背景颜色的同学属于同一个小组（绑定组名，方便观察轮换轨迹）。
-*   **布局**：左侧两列为9排，其余为8排。
-*   **轮换**：使用“区域贪吃蛇连积算法”。左侧改变【轮换周期】，所有小组可以在全教室不同排、不同列平滑移位，同时仍保持组员相邻不失散。随着周期的增加，组内成员也会有规律地在自己小组的领地内首尾轮换位置。
+*   **色块**：同一种背景颜色的同学属于同一个小组。
+*   **布局**：分为左岛(列1-2)、中岛(列3-5)、右岛(列6-7)。严禁小组跨越走道分割！
+*   **轮换**：左侧改变【轮换周期】，小组可以在不同排、不同岛屿平滑移位，同时保持组员聚集。
 """)
 
 # ==========================================
@@ -55,21 +55,26 @@ def parse_group_text(text):
 # ==========================================
 class SeatAllocator:
     def __init__(self):
+        # 🌟 核心改进：遵循物理走道的孤岛贪吃蛇路线 🌟
+        # 路线总共 58 个座位，确保每一段切出来的连续区间，不会跨越两个岛！
+        
         path = []
+        
+        # 【左岛】 (列0和列1): 9排, 每排放2人，共18人 (2个9人组完美放入)
         for r in range(9):
             if r % 2 == 0: path.extend([(r,0), (r,1)])
             else: path.extend([(r,1), (r,0)])
                 
+        # 【中岛】 (列2到列4): 8排, 每排放3人，共24人 (3个8人组完美放入)
+        # 这里折返时保证3个人横向紧挨，然后在下一排反向折回来
         for r in range(7, -1, -1):
-            if r % 2 == 0: path.extend([(r,2), (r,3)])
-            else: path.extend([(r,3), (r,2)])
+            if r % 2 == 0: path.extend([(r,2), (r,3), (r,4)])
+            else: path.extend([(r,4), (r,3), (r,2)])
                 
+        # 【右岛】 (列5和列6): 8排, 每排放2人，共16人 (2个8人组完美放入)
         for r in range(8):
-            if r % 2 == 0: path.extend([(r,4), (r,5)])
-            else: path.extend([(r,5), (r,4)])
-                
-        for r in range(7, -1, -1):
-            path.append((r,6))
+            if r % 2 == 0: path.extend([(r,5), (r,6)])
+            else: path.extend([(r,6), (r,5)])
             
         self.seat_path = path
         
@@ -91,22 +96,16 @@ class SeatAllocator:
         current_idx = 0
         for group in rotated_groups:
             size = group['size']
-            
-            # 使用初始的固定名单顺序复制
             members = group['members'].copy()
             
-            # 🌟 2. 组内成员的规律性轮换 
-            # 每过一周（无论是否按按钮），按照贪吃蛇序列向前移2位（这样前后/左右交替感更明显）
+            # 2. 组内成员规律性轮换
             inner_offset = ((rotation_idx - 1) * 2) % size
             if inner_offset != 0:
                 members = members[-inner_offset:] + members[:-inner_offset]
             
-            # 🌟 3. 保留按钮打乱的随机性：仅在绘制“当前周”且用户希望有一点微扰时生效
-            # 为了让每次点击“生成交替图”时当前周有一点随机性，但在历史记录里保持绝对一致的轨迹。
-            # 给成员做有限打散（比如同排左右换位）：
+            # 3. 点击按钮带来的随机微扰
             if is_current_run:
-                # 随机交换几个人的位置增加活性，但不破坏整体顺延逻辑
-                for _ in range(size // 3):  
+                for _ in range(max(1, size // 3)):  
                     idx1 = random.randint(0, size - 1)
                     idx2 = random.randint(0, size - 1)
                     members[idx1], members[idx2] = members[idx2], members[idx1]
@@ -130,9 +129,25 @@ def render_seat_chart(result_map):
     display_data = np.full((9, 7), "", dtype=object)
     color_data = np.full((9, 7), "background-color: #ffffff", dtype=object) 
 
+    # 为走道添加深灰色边框进行视觉隔离
+    for r in range(9):
+        for c in range(7):
+            base_style = "color: black; border-top: 1px solid #ddd; border-bottom: 1px solid #ddd;"
+            # 在走道边上加粗边框
+            if c == 1:
+                base_style += " border-right: 4px solid #666;"
+            elif c == 2:
+                base_style += " border-left: 4px solid #666;"
+            elif c == 4:
+                base_style += " border-right: 4px solid #666;"
+            elif c == 5:
+                base_style += " border-left: 4px solid #666;"
+            color_data[r, c] = base_style
+
     for (r, c), info in result_map.items():
         display_data[r, c] = info['name']
-        color_data[r, c] = f"background-color: {info['color']}; color: black; border: 1px solid white;"
+        existing_style = color_data[r, c]
+        color_data[r, c] = existing_style + f" background-color: {info['color']};"
 
     cols = [f"第{i+1}列" for i in range(7)]
     rows = [f"第{i+1}排" for i in range(9)]
@@ -167,12 +182,10 @@ if st.button("🎲 生成交替座位图", type="primary"):
     parsed_groups = parse_group_text(uploaded_groups_text)
     allocator = SeatAllocator()
     
-    # 🌟 1. 渲染当前周的座位表 (这里允许有一点生成按钮带来的微小随机打乱)
     st.write(f"### 🎯 讲台 (FRONT) - 当前第 {rotation_week} 周")
     current_result = allocator.allocate(parsed_groups, rotation_week, is_current_run=True)
     render_seat_chart(current_result)
     
-    # 🌟 2. 渲染历史记录
     if history_limit != "不显示" and rotation_week > 1:
         st.markdown("---")
         st.write("### 📜 历史座位表回顾 (倒序)")
@@ -186,6 +199,5 @@ if st.button("🎲 生成交替座位图", type="primary"):
         
         for past_w in range(rotation_week - 1, rotation_week - 1 - actual_limit, -1):
             st.write(f"#### 🔙 第 {past_w} 周的历史座位")
-            # 历史记录渲染时关闭随机微扰，呈现平滑干净的轨迹
             past_result = allocator.allocate(parsed_groups, past_w, is_current_run=False)
             render_seat_chart(past_result)
